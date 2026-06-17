@@ -1,87 +1,153 @@
-# Getting Started with Azure AI Document Intelligence for Receipt Scanning
+# Azure AI Document Intelligence & Semantic Search Receipt System
 
-Azure AI Document Intelligence (formerly Form Recognizer) is an AI service that uses machine learning models to extract text, key-value pairs, tables, and structures from documents. It includes a **Prebuilt Receipt Model** designed specifically to extract fields from sales receipts without needing to train custom models.
-
-This guide helps you set up Azure, test receipt extraction without code, and run a Python script to scan receipts programmatically.
+This project is a hybrid data extraction, categorization, and semantic search system for receipt scans. It combines **Azure AI Document Intelligence** for document parsing, **SQLite** for structured transactional database reports, and **Chroma DB** with local Hugging Face embeddings for semantic line-item search.
 
 ---
 
-## 1. Setup Your Azure Resource
+## Architecture Overview
 
-To use the service, you need an Azure account and a Document Intelligence resource.
+```
+ ┌────────────────────────┐      ┌─────────────────────────┐
+ │ Receipt PDF / Image    ├─────►│ Azure Doc Intel Service │
+ └────────────────────────┘      └────────────┬────────────┘
+                                              │ (as_dict)
+                                              ▼
+ ┌────────────────────────┐      ┌─────────────────────────┐
+ │ SQLite DB (receipts.db)◄─────┤  index_receipts.py      │
+ │ (Reports & Aggregates) │      │  (Item Categorizer)     │
+ └────────────────────────┘      └────────────┬────────────┘
+                                              │ (all-MiniLM-L6-v2)
+                                              ▼
+                                 ┌─────────────────────────┐
+                                 │  Chroma Vector DB       │
+                                 │  (Semantic Search)      │
+                                 └─────────────────────────┘
+```
 
-1. **Sign in/Sign up**: Go to the [Azure Portal](https://portal.azure.com/).
-2. **Create a Resource**:
-   - Search for **Document Intelligence** in the marketplace.
-   - Click **Create**.
-3. **Configure Resource**:
-   - Choose/create a **Resource Group**.
-   - Select a region (e.g., `East US` or your local region).
-   - Enter a unique **Name** for your resource.
-   - For the pricing tier, select **Free (F0)** if available (great for testing) or **Standard (S1)**.
-4. **Get Keys and Endpoint**:
-   - Once the resource is deployed, navigate to it.
-   - On the left sidebar under **Resource Management**, click **Keys and Endpoint**.
-   - Copy **KEY 1** (or KEY 2) and the **Endpoint** URL.
-
----
-
-## 2. No-Code Testing: Azure Document Intelligence Studio
-
-Before writing code, you can test the models visually:
-
-1. Open the [Azure AI Document Intelligence Studio](https://documentintelligence.ai.azure.com/).
-2. Scroll to the **Prebuilt models** section and select **Receipts**.
-3. Select your Azure subscription, resource, and pricing tier to configure the workspace.
-4. Upload an image of a receipt or choose one of the provided samples.
-5. Click **Run analysis** (or **Analyze**) to view the extracted fields visually on the right side and inspect the raw JSON output.
+1. **Extraction**: `analyze_receipt.py` sends raw images/PDFs of receipts to Azure AI Document Intelligence and saves the response as structured JSON in `.\receipts_json\`.
+2. **Database & Categorization**: `index_receipts.py` reads the cached JSON files, automatically classifies each line item into a Category and Sub-category (e.g., `Wacom Tablet` -> `electronics/tablet`), saves structured records to **SQLite**, and generates text embeddings.
+3. **Vector Indexing**: The embeddings and item metadata are upserted into a local **Chroma DB** instance.
+4. **Retrieval**: `query_receipts.py` performs SQL aggregations for financial reports and vector similarity searches for semantic retrieval.
 
 ---
 
-## 3. Python SDK Quickstart
+## 1. Prerequisites & Installation
 
-We have created a script [analyze_receipt.py](file:///c:/Users/Pavan%20Sachi/work/personal/projects/antigravity/bill-scans/analyze_receipt.py) in this workspace. Follow these steps to run it:
+### Option A: Using `uv` (Fastest, Recommended)
+If you have `uv` installed, it manages virtual environments and installs dependencies extremely quickly:
 
-### Setup Your Environment
+```powershell
+# Create the virtual environment
+uv venv
 
-It is recommended to run Python scripts inside a virtual environment to avoid polluting global python packages:
+# Install dependencies
+uv pip install -r requirements.txt
+```
 
-1. Open your terminal in the `bill-scans` folder.
-2. Initialize and activate a virtual environment:
-   ```powershell
-   # Create environment
-   python -m venv .venv
+### Option B: Standard Python `venv`
+```powershell
+# Create the virtual environment
+python -m venv .venv
 
-   # Activate environment (Windows PowerShell)
-   .venv\Scripts\Activate.ps1
-   ```
-3. Install the required client libraries:
-   ```powershell
-   .venv\Scripts\pip install azure-ai-documentintelligence azure-core
-   ```
+# Activate (Windows PowerShell)
+.venv\Scripts\Activate.ps1
 
-### Run the Script
-
-1. Set your Endpoint and Key as environment variables in your terminal:
-   ```powershell
-   $env:AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://your-resource-name.cognitiveservices.azure.com/"
-   $env:AZURE_DOCUMENT_INTELLIGENCE_KEY="your-api-key-here"
-   ```
-2. Run the script with a sample online receipt:
-   ```powershell
-   .venv\Scripts\python analyze_receipt.py
-   ```
-3. Run the script with a local receipt scan:
-   ```powershell
-   .venv\Scripts\python analyze_receipt.py C:\path\to\your\receipt.jpg
-   ```
+# Install dependencies
+.venv\Scripts\pip install -r requirements.txt
+```
 
 ---
 
-## Extracted Fields Reference
+## 2. Configuration
 
-The `prebuilt-receipt` model extracts:
-- **Merchant Details**: `MerchantName`, `MerchantAddress`, `MerchantPhoneNumber`
-- **Transaction Details**: `TransactionDate`, `TransactionTime`
-- **Line Items**: An array of `Items` where each item has `Description`, `Quantity`, `UnitPrice`, and `TotalPrice`.
-- **Financial Totals**: `Subtotal`, `TotalTax`, `Tip`, and `Total`.
+Set your Azure AI Document Intelligence Endpoint and Key as environment variables in your terminal:
+
+```powershell
+$env:AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://your-resource-name.cognitiveservices.azure.com/"
+$env:AZURE_DOCUMENT_INTELLIGENCE_KEY="your-api-key-here"
+```
+
+---
+
+## 3. How to Use
+
+### Step 1: Scan Receipts (`analyze_receipt.py`)
+This script uploads local files or URLs to Azure and saves the result as raw JSON files in `.\receipts_json\`.
+
+* **Scan a single local file:**
+  ```powershell
+  .venv\Scripts\python analyze_receipt.py receipts\your_receipt.pdf
+  ```
+* **Scan an entire directory of files:**
+  ```powershell
+  .venv\Scripts\python analyze_receipt.py .\receipts
+  ```
+* **Scan a receipt with custom query fields (e.g. extracting ABN/PaymentMethod):**
+  ```powershell
+  .venv\Scripts\python analyze_receipt.py receipts\your_receipt.pdf --query ABN PaymentMethod
+  ```
+
+### Step 2: Index and Categorize (`index_receipts.py`)
+This processes the cached JSON files, classifies items, and updates SQLite and Chroma DB:
+
+```powershell
+.venv\Scripts\python index_receipts.py
+```
+
+### Step 3: Query & Generate Reports (`query_receipts.py`)
+Once indexed, you can query and search the databases entirely offline.
+
+* **List all receipts in the system:**
+  ```powershell
+  .venv\Scripts\python query_receipts.py --list
+  ```
+* **Show spending aggregated by Category:**
+  ```powershell
+  .venv\Scripts\python query_receipts.py --report category
+  ```
+* **Show spending aggregated by Sub-category:**
+  ```powershell
+  .venv\Scripts\python query_receipts.py --report subcategory
+  ```
+* **Show monthly spending over time:**
+  ```powershell
+  .venv\Scripts\python query_receipts.py --report monthly
+  ```
+* **Perform a semantic vector search on line items:**
+  ```powershell
+  .venv\Scripts\python query_receipts.py --search "something to draw on computer"
+  ```
+  *(Example: Searching for "drawing device" will find a Wacom Tablet using similarity scores, even if those exact words aren't in the receipt description.)*
+
+---
+
+## Categorization Customization
+
+Line items are categorized automatically by description matching inside `index_receipts.py`. You can expand the keyword mapping dictionary inside `index_receipts.py` to match your specific spending habits:
+
+```python
+CATEGORIES = {
+    # electronics
+    "airpod": ("electronics", "headphone"),
+    "wacom": ("electronics", "tablet"),
+    
+    # eatout
+    "mocha": ("eatout", "coffee"),
+    "burger": ("eatout", "fastfood"),
+    
+    # grocery
+    "apple": ("grocery", "fruit"),
+    "milk": ("grocery", "dairy"),
+}
+```
+
+---
+
+## Azure Cost Reference (Prebuilt Receipt Model)
+
+| Pricing Tier | Base Analysis Cost | Query Fields Add-on |
+| :--- | :--- | :--- |
+| **Free (F0)** | Free (up to 500 pages/month) | Free (within 500 pages/month) |
+| **Standard (S1)** | $10 per 1,000 pages ($0.01/page) | +$10 per 1,000 pages (+$0.01/page) |
+
+*Note: Once you have run the analysis and saved the JSON files, you can delete the Azure resource or turn off internet access. Indexing, SQL reporting, and semantic searches run completely locally at no cost.*
