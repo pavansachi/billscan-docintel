@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import hashlib
 import argparse
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -56,6 +58,26 @@ def analyze_receipt(source_path_or_url: str, query_fields: list = None):
         
         result = poller.result()
         print("Analysis completed successfully!\n")
+        
+        # Save structured JSON to receipts_json
+        os.makedirs("receipts_json", exist_ok=True)
+        is_url = source_path_or_url.startswith("http://") or source_path_or_url.startswith("https://")
+        if is_url:
+            clean_url = source_path_or_url.split("?")[0]
+            base_name = clean_url.split("/")[-1]
+            if not base_name or "." not in base_name:
+                base_name = f"receipt_{hashlib.md5(source_path_or_url.encode()).hexdigest()}"
+            else:
+                base_name = os.path.splitext(base_name)[0]
+        else:
+            base_name = os.path.splitext(os.path.basename(source_path_or_url))[0]
+            
+        json_path = os.path.join("receipts_json", f"{base_name}.json")
+        result_dict = result.as_dict()
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(result_dict, f, indent=4)
+        print(f"Saved structured JSON to: {json_path}\n")
+        
         display_results(result, query_fields)
 
     except HttpResponseError as e:
